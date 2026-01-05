@@ -6,6 +6,7 @@
 # - CPU-only (simple): pip3 install torch tqdm
 # - GPU (example for CUDA 11.8): pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 # usage: python cuda.py --size 5000 --iters 20
+# hint: with larger matrix size, the speedup will be more significant
 
 import time
 import argparse
