@@ -259,6 +259,10 @@ nn包定义了一组模块（Module），大致相当于神经网络层。模块
 
 TLDR：现在我们连模型也不自己定义了，而是搭积木一样
 
+[code](./4.py)
+
+[notebook](./4x.ipynb) 还有神秘自动次数功能
+
 ```python
 # -*- coding: utf-8 -*-
 import torch
@@ -300,6 +304,10 @@ model = torch.nn.Sequential(
 # case we will use Mean Squared Error (MSE) as our loss function.
 loss_fn = torch.nn.MSELoss(reduction='sum')
 
+# 对于这里仅求和的MSE，更大的数据量会带来数值上更大的loss
+# 很有可能会导致nan，届时什么梯度都求不出来
+# 解决方法：降低学习率
+# 如果发现降低学习率之后，训练后半又下降特别慢，去看下自适应学习率的工作
 learning_rate = 1e-6
 for t in range(2000):
 
@@ -319,6 +327,7 @@ for t in range(2000):
         print(t, loss.item())
 
     # 梯度清零，否则梯度会累加
+    # **重要** 之前手搓的程序不收敛就是这里漏了
     # Zero the gradients before running the backward pass.
     model.zero_grad()
 
