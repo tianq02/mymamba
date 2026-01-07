@@ -24,15 +24,13 @@ def run_benchmark(device: torch.device, size: int, iterations: int) -> float:
         # print('Running on CPU with threads =', torch.get_num_threads())
 
     # print an empty line, prevent tqdm from overwriting the previous line
-    print()
+    # print()
 
     # warm up
     if device.type == 'cuda':
         torch.rand(1, device=device)
         torch.cuda.synchronize()
 
-    if device.type == 'cuda':
-        torch.cuda.synchronize()
     t0 = time.perf_counter()
 
     for _ in tqdm(range(iterations), desc=f'{device.type.upper()} bench', unit='iter'):
