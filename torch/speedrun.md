@@ -1,3 +1,5 @@
+from fontTools.merge.util import current_time
+
 # pytorch speedrun
 
 1. Install PyTorch
@@ -7,6 +9,36 @@
 2. 很抱歉我现在屁都不会，接下来我们逐个示例程序看
 
    参考：https://docs.pytorch.org/tutorials/beginner/pytorch_with_examples.html
+
+## hints:
+
+1. 有关进度条：
+
+我个人推荐用tqdm，它在终端永远不会出问题，在notebook中只要改成tqdm.notebook就行
+
+在notebook中，如果训练较快，疯狂写loss信息到进度条可能会爆炸，需要手动限制刷新频率，例如：
+
+```python
+import time
+from tqdm import tqdm
+
+epoch = 10000
+update_interval = 0.5  # 秒
+
+bar = tqdm(total=epoch)
+update_next = time.time()
+
+for t in range(1,epoch+1):
+   time.sleep(0.001)
+   bar.update(1)
+   
+   current_time = time.time()
+   if current_time > update_next:
+      update_next = current_time + update_interval
+      bar.set_postfix(loss="current loss here")
+```
+
+见[bar](./bar.ipynb)
 
 ## 示例程序们：
 
@@ -352,3 +384,91 @@ linear_layer = model[0]
 # For linear layer, its parameters are stored as `weight` and `bias`.
 print(f'Result: y = {linear_layer.bias.item()} + {linear_layer.weight[:, 0].item()} x + {linear_layer.weight[:, 1].item()} x^2 + {linear_layer.weight[:, 2].item()} x^3')
 ```
+
+### 5. optim example
+
+想法很简单：
+
+- 前面每次更新权重的时候都要手动地暂停梯度计算然后逐个更新权重，这要写三行
+- 而且，注意到：随着训练的进行，似乎需要更高学习率来让 loss 下降更快，现有的固定学习率梯度下降效果不是很好
+
+解决：
+
+- 将优化过程包装成 optim 下面的模块，每次不再需要写三行，只要一句`optimizer.step()`就可以了
+
+[code](./5x.ipynb) 还有船新误差绘图展示
+
+注：这里的代码是我自己乱写的，可能有问题
+
+```python
+import time
+
+import torch
+from tqdm.notebook import tqdm
+import matplotlib.pyplot as plt
+
+dtype = torch.float
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+torch.set_default_dtype(dtype)
+torch.set_default_device(device)
+
+x = torch.linspace(-2,2,10000)
+y = x.sigmoid()
+
+plt.plot(x.detach().cpu().numpy(),y.detach().cpu().numpy())
+plt.show()
+
+epoch = 100000
+learning_rate = 2e-3
+max_pow = 6
+msg_precision = 3
+update_interval = 0.5
+
+p = torch.tensor(range(1, max_pow + 1))
+xx = x.unsqueeze(-1).pow(p)
+
+loss_fn = torch.nn.MSELoss()
+
+model = torch.nn.Sequential(
+   torch.nn.Linear(max_pow, 1),
+   torch.nn.Flatten(0, 1)
+)
+
+optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+
+with tqdm(total=epoch) as bar:
+   update_next = time.time()
+
+   for i in range(1, epoch + 1):
+      y_pred = model(xx)
+      loss = loss_fn(y_pred, y)
+
+      bar.update(1)
+
+      if time.time() > update_next or i == epoch:
+         update_next += update_interval
+         bar.set_postfix(loss=loss.item())
+
+      # 注意这里的zero_grad在optimizer上，理论上直接在model上zero_grad也行，不更新优化器内部的状态可能造成问题
+      optimizer.zero_grad()
+
+      loss.backward()
+
+      
+      # 原先手动的一大堆更新，现在只要简单地一个step
+      # with torch.no_grad():
+      #     for param in model.parameters():
+      #         param -= learning_rate * param.grad
+      optimizer.step()
+
+msg = f"y = {model[0].bias.item():.{msg_precision}f}"
+for p, w in enumerate(model[0].weight.tolist()[0], start=1):
+   if abs(w) < pow(0.1, msg_precision):
+      continue
+   msg += " - " if w < 0 else " + "
+   msg += f"{abs(w):.{msg_precision}f}"
+   msg += f" x^{p}" if p > 1 else " x"
+print(msg)
+```
+
