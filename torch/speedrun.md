@@ -480,6 +480,10 @@ print(msg)
 
 > 在mamba-minimal中大量看到了这种写法，必须掌握
 
+[sample](6.ipynb)
+
+[code](6x.ipynb) 含有手搓的终极版格式设置，以及用sympy的latex渲染输出
+
 ```python
 # -*- coding: utf-8 -*-
 import torch
