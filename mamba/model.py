@@ -7,7 +7,7 @@ import torch.nn.functional as F
 import json
 from dataclasses import dataclass
 
-from einops import repeat, einsum
+from einops import repeat, einsum, rearrange
 
 
 ## skeleton
@@ -38,7 +38,7 @@ class ModelArgs:
     d_conv: int = 4  # 卷积核 (仅出现一次在输入投影后)
     pad_vocab_size_multiple: int = 8  # 词表整数倍对齐, 或许只是个兼容性参数
     conv_bias: bool = True  # 卷积偏置
-    bias: bool = True  # 输入输出投影中的偏置
+    bias: bool = False  # 输入输出投影中的偏置
 
     def __post_init__(self):
         self.d_inner = int(self.expand * self.d_model)  # 输入投影后,内部表示的维度
@@ -61,7 +61,7 @@ class Mamba(nn.Module):
     - 中间连续多个ResidualBlock(mamba模型+包裹的残差连接和归一化)
     - 最后的f范数
     """
-    def init(self, args: ModelArgs):
+    def __init__(self, args: ModelArgs):
         super().__init__()
         self.args = args
 
@@ -161,12 +161,14 @@ class ResidualBlock(nn.Module):
         """
         # mamba minimal 中对于残差块的实现有些讨论,这里我们按照原文写了一个
         # 如果炸了,换成这个 output = self.mixer(self.norm(x)) + x
-        output = self.norm(self.mixer(x)+x)
+        # output = self.norm(self.mixer(x)+x) # 炸了
+        output = self.mixer(self.norm(x)) + x
         return output
 
 class MambaBlock(nn.Module):
     def __init__(self, args: ModelArgs):
         super().__init__()
+        self.args = args
 
         # 输入映射, * 2是指一半进ssm,一半到右边仅激活（mamba内类似残差的分支，不是前面残差块在mamba外套的残差）,两个线性计算合并
         # 有关d_inner,这是模块内的输入扩展,见ModelArgs.expand,默认参数下,d_inner=d_model*2
@@ -188,7 +190,7 @@ class MambaBlock(nn.Module):
         # 这里是SiLU到SSM中间的小线性层,同上,合并参数
         self.x_proj = nn.Linear(args.d_inner, args.dt_rank + args.d_state * 2, bias=False)
         # delta专属的Broadcast线性层,扩展维度回到d_inner
-        self.dt_proj = nn.Linear(args.d_inner, args.d_inner)
+        self.dt_proj = nn.Linear(args.dt_rank, args.d_inner)
 
         # 偷来的,初始化A的参数为[1,2,3,4; 1,2,3,4; 1,2,3,4]
         # 这可不是什么HiPPO
@@ -221,13 +223,13 @@ class MambaBlock(nn.Module):
         # 而且，如果marteen的文章有参考价值的话，mamba中卷积的padding方式对最终性能有影响
         # 这里有一点点不明确，目前按照mamba_minimal的方式处理
         # 1. 交换x的维度
-        x = x.rearrange(x,'b l d_in -> b d_in l') # 把l挪到最后一维，在l上一维卷积
+        x = rearrange(x,'b l d_in -> b d_in l') # 把l挪到最后一维，在l上一维卷积
         # 2. 一维卷积(从后往前，前面的维度视作入通道，后面的维度视作下标)
         # 切片，避免padding造成的维度变化，这里最后切一刀，相当于丢掉输入末尾的padding，保持输出维度一致
         # 理论上应该也可以用F.pad实现，真要折腾的话及的改self.conv1d定义中的padding
-        x = self.conv1d(x)[:,:,:self.args.d_inner]
+        x = self.conv1d(x)[:,:,:l]
         # 3. 再转回去
-        x = x.rearrange(x,'b d_in,l -> b l d_in')
+        x = rearrange(x,'b d_in l -> b l d_in')
 
         # SiLU激活
         x = F.silu(x)
@@ -247,7 +249,7 @@ class MambaBlock(nn.Module):
 
     def s6(self, x):
         (delta,A,B,C,D) = self.generate_params(x)  # 生成时变参数
-        (AA,BB) = self.discretize_params(delta,A,B)  # ZOH离散化A,B
+        (AA,BB) = self.discretize_params(delta,A,B,use_zoh=False)  # ZOH离散化A,B
         y = self.selective_scan(x,AA,BB,C,D)  # 选择性扫描
         return y
 
