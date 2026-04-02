@@ -120,6 +120,22 @@ def generate(model, params, input_ids, n_tokens_to_gen: int = 50,
 
     return generated
 
+# 移除softmax和topk等
+def generate_ex(model, params, input_ids, n_tokens_to_gen: int = 50):
+
+    next_token_logits, states = prefill(model, params, input_ids)
+
+    generated = jnp.zeros((input_ids.shape[0], n_tokens_to_gen), dtype=input_ids.dtype)
+
+    for i in range(n_tokens_to_gen):
+        next_id = jnp.argmax(next_token_logits, axis=-1)
+
+        generated = generated.at[:, i].set(next_id)
+
+        next_token_logits, states = step_fn(model, params, next_id, states)
+
+    return generated
+
 
 if __name__ == '__main__':
 

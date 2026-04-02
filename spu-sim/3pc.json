@@ -21,16 +21,14 @@
                     "127.0.0.1:61931",
                     "127.0.0.1:61932"
                 ],
-                "experimental_data_folder": [
-                    "/tmp/spu_data_0/",
-                    "/tmp/spu_data_1/",
-                    "/tmp/spu_data_2/"
-                ],
                 "runtime_config": {
                     "protocol": "ABY3",
-                    "field": "FM64",
+                    "field": "FM128",
+                    "fxpFractionBits": 36,
                     "enable_pphlo_profile": true,
-                    "enable_hal_profile": true
+                    "enable_hal_profile": true,
+                    "fxpDivGoldschmidtIters": 3,
+                    "fxpExpMode": 1
                 }
             }
         },
