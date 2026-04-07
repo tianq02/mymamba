@@ -123,47 +123,21 @@ def generate(model, params, input_ids, n_tokens_to_gen: int = 50,
 # generate函数不应该jit，它jit后运行速度会慢得多，但SPU似乎要求JIT
 # @partial(jax.jit, static_argnames=['model','n_tokens_to_gen','sample','top_k'])
 def generate_min_p(model, params, input_ids, n_tokens_to_gen: int = 50,
-             min_p: int = 0.1, seed: int = 42):
+             min_p: float = 0.1, seed: int = 42):
     key = jax.random.PRNGKey(seed)
     next_token_logits, states = prefill(model, params, input_ids)
 
     generated = jnp.zeros((input_ids.shape[0], n_tokens_to_gen), dtype=input_ids.dtype)
 
     for i in range(n_tokens_to_gen):
-
-        # print("step 0, next_token_logits=")
-        # print(next_token_logits)
-
-        # 1. logits转概率
-        raw_probs = jax.nn.softmax(next_token_logits, axis=-1)
-
-        # print("step 1, probs=")
-        # print(probs)
-
-        # 2. 取最大概率
-        max_prob = jnp.max(raw_probs)
-
-        # print("step 2, max_prob=", max_prob, "min_prob=", min_p*max_prob)
-
-        # 3. 其余置0
-        filtered_logits = jnp.where(raw_probs < min_p * max_prob, -1e9, raw_probs)
-
-        # print("step 3, filtered_logits=")
-        # print(filtered_logits)
-
-        # 归一化概率
-        out_probs = jax.nn.softmax(filtered_logits, axis=-1)
-
-        # print("step 4, probs=")
-        # print(probs)
+        max_logit = jnp.max(next_token_logits, axis=-1, keepdims=True)
+        threshold = jnp.log(min_p) + max_logit # math hack
+        mask = next_token_logits >= threshold
+        filtered_logits = jnp.where(mask, next_token_logits, -1e10)
 
         # 随机采样
         key, subkey = jax.random.split(key)
-        next_id = jax.random.categorical(subkey, jnp.log(out_probs + 1e-9), axis=-1)
-
-        # print("step 5, next_id=", next_id, "probs[0,next_id]", probs[next_id])
-
-        print(f"min_p={min_p}, sampling done, max_prob={max_prob:.3f}, min_prob={min_p*max_prob:.3f}, candidates={jnp.count_nonzero(out_probs)}, id={next_id}, prob={raw_probs[0,next_id][0]:.3f}")
+        next_id = jax.random.categorical(subkey, filtered_logits, axis=-1)
 
         generated = generated.at[:, i].set(next_id)
 
@@ -181,7 +155,6 @@ if __name__ == '__main__':
     print('\n------\nRun on CPU')
     prompt = 'Python is'
     input_ids = tokenizer.encode(prompt, return_tensors='jax')
-    print(input_ids)
     output_ids = generate_min_p(model, params, input_ids, 10, seed=42)
     print(prompt, tokenizer.decode(output_ids[0]), sep='')
 
