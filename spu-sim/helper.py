@@ -120,8 +120,32 @@ def generate(model, params, input_ids, n_tokens_to_gen: int = 50,
 
     return generated
 
-# 移除softmax和topk等
-def generate_ex(model, params, input_ids, n_tokens_to_gen: int = 50):
+# 优化掉第一个softmax的版本
+def generate_topk(model, params, input_ids, n_tokens_to_gen: int = 50,
+                  top_k: int = 40, seed: int = 42):
+    key = jax.random.PRNGKey(seed)
+    next_token_logits, states = prefill(model, params, input_ids)
+    generated = jnp.zeros((input_ids.shape[0], n_tokens_to_gen), dtype=input_ids.dtype)
+
+    for i in range(n_tokens_to_gen):
+        # 1. 找到第 k 大的 logit 值（阈值）
+        values, _ = jax.lax.top_k(next_token_logits, k=top_k)
+        kth = values[:, -1:]                     # 形状 (batch, 1)
+
+        # 2. 掩码：小于阈值的设为 -1e9（或 -inf）
+        masked_logits = jnp.where(next_token_logits < kth, -1e9, next_token_logits)
+
+        # 3. 直接采样（categorical 内部会做 softmax）
+        key, subkey = jax.random.split(key)
+        next_id = jax.random.categorical(subkey, masked_logits, axis=-1)
+
+        generated = generated.at[:, i].set(next_id)
+        next_token_logits, states = step_fn(model, params, next_id, states)
+
+    return generated
+
+# 贪心搜索，理论最快，但效果最差
+def generate_greedy(model, params, input_ids, n_tokens_to_gen: int = 50):
 
     next_token_logits, states = prefill(model, params, input_ids)
 
@@ -129,6 +153,31 @@ def generate_ex(model, params, input_ids, n_tokens_to_gen: int = 50):
 
     for i in range(n_tokens_to_gen):
         next_id = jnp.argmax(next_token_logits, axis=-1)
+
+        generated = generated.at[:, i].set(next_id)
+
+        next_token_logits, states = step_fn(model, params, next_id, states)
+
+    return generated
+
+# generate函数不应该jit，它jit后运行速度会慢得多，但SPU似乎要求JIT
+# @partial(jax.jit, static_argnames=['model','n_tokens_to_gen','sample','top_k'])
+def generate_minp(model, params, input_ids, n_tokens_to_gen: int = 50,
+                   min_p: float = 0.1, seed: int = 42):
+    key = jax.random.PRNGKey(seed)
+    next_token_logits, states = prefill(model, params, input_ids)
+
+    generated = jnp.zeros((input_ids.shape[0], n_tokens_to_gen), dtype=input_ids.dtype)
+
+    for i in range(n_tokens_to_gen):
+        max_logit = jnp.max(next_token_logits, axis=-1, keepdims=True)
+        threshold = jnp.log(min_p) + max_logit # math hack
+        mask = next_token_logits >= threshold
+        filtered_logits = jnp.where(mask, next_token_logits, -1e10)
+
+        # 随机采样
+        key, subkey = jax.random.split(key)
+        next_id = jax.random.categorical(subkey, filtered_logits, axis=-1)
 
         generated = generated.at[:, i].set(next_id)
 
@@ -146,5 +195,5 @@ if __name__ == '__main__':
     print('\n------\nRun on CPU')
     prompt = 'Python is'
     input_ids = tokenizer.encode(prompt, return_tensors='jax')
-    output_ids = generate(model, params, input_ids, 10, seed=42)
+    output_ids = generate_minp(model, params, input_ids, 100, seed=42)
     print(prompt, tokenizer.decode(output_ids[0]), sep='')
