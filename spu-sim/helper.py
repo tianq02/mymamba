@@ -195,5 +195,5 @@ if __name__ == '__main__':
     print('\n------\nRun on CPU')
     prompt = 'Python is'
     input_ids = tokenizer.encode(prompt, return_tensors='jax')
-    output_ids = generate_minp(model, params, input_ids, 100, seed=42)
+    output_ids = generate_minp(model, params, input_ids, 10, seed=42)
     print(prompt, tokenizer.decode(output_ids[0]), sep='')
