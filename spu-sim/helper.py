@@ -189,7 +189,7 @@ def generate_minp(model, params, input_ids, n_tokens_to_gen: int = 50,
 if __name__ == '__main__':
 
     # model_name = 'state-spaces/mamba-130m-hf'
-    base_path="/root/.cache/huggingface/hub/models--state-spaces--mamba-130m-hf/snapshots/1e76775f628fbf1350fbe4dbb3d971ba64af25a1"
+    base_path="/root/autodl-shared/hf_cache/hub/models--state-spaces--mamba-130m-hf/snapshots/1e76775f628fbf1350fbe4dbb3d971ba64af25a1"
     model, params, tokenizer = load_from_cache(base_path)
 
     print('\n------\nRun on CPU')
