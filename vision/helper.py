@@ -66,150 +66,85 @@ def load_model(model_path: str):
     return model
 
 
-def load_param(param_path: str):
-    """
-    加载模型参数
-    这里写得又臭又长，想要彻底解决需要改model
-    """
+def map_pt_key_to_flax_path(pt_key: str):
+    """映射 PyTorch 权重名称为 Flax 骨架路径 (保留了必要的替换逻辑)"""
+    if "num_batches_tracked" in pt_key:
+        return None
+    k = pt_key.replace("model.", "")
 
-    def map_pt_key_to_flax_path(pt_key):
-        """
-        精确将 PyTorch 权重名称映射为我们的 Flax 骨架路径
-        """
-        if "num_batches_tracked" in pt_key:
-            return None
-
-        # 移除最前面的 model.
-        k = pt_key.replace("model.", "")
-
-        # 1. PatchEmbed
-        if k.startswith("patch_embed.conv_down.0"):
-            k = k.replace("patch_embed.conv_down.0", "PatchEmbed_0/Conv_0")
-        elif k.startswith("patch_embed.conv_down.1"):
-            k = k.replace("patch_embed.conv_down.1", "PatchEmbed_0/BatchNorm_0")
-        elif k.startswith("patch_embed.conv_down.3"):
-            k = k.replace("patch_embed.conv_down.3", "PatchEmbed_0/Conv_1")
-        elif k.startswith("patch_embed.conv_down.4"):
-            k = k.replace("patch_embed.conv_down.4", "PatchEmbed_0/BatchNorm_1")
-
-        # 2. 全局 Norm & Head
-        elif k.startswith("norm."):
-            k = k.replace("norm", "BatchNorm_0")
-        elif k.startswith("head."):
-            k = k.replace("head", "Dense_0")
-
-        # 3. 核心 Levels
-        elif k.startswith("levels."):
-            parts = k.split('.')
-            lvl = parts[1]
-
-            if "downsample" in k:
-                k = k.replace(f"levels.{lvl}.downsample.reduction.0", f"MambaVisionLayer_{lvl}/Downsample_0/Conv_0")
+    if k.startswith("patch_embed"):
+        k = k.replace("patch_embed.conv_down.0", "PatchEmbed_0/Conv_0") \
+            .replace("patch_embed.conv_down.1", "PatchEmbed_0/BatchNorm_0") \
+            .replace("patch_embed.conv_down.3", "PatchEmbed_0/Conv_1") \
+            .replace("patch_embed.conv_down.4", "PatchEmbed_0/BatchNorm_1")
+    elif k.startswith("norm."): k = k.replace("norm", "BatchNorm_0")
+    elif k.startswith("head."): k = k.replace("head", "Dense_0")
+    elif k.startswith("levels."):
+        parts = k.split('.')
+        lvl = parts[1]
+        if "downsample" in k:
+            k = k.replace(f"levels.{lvl}.downsample.reduction.0", f"MambaVisionLayer_{lvl}/Downsample_0/Conv_0")
+        else:
+            blk, base = parts[3], f"MambaVisionLayer_{lvl}"
+            if int(lvl) in [0, 1]:
+                k = k.replace(f"levels.{lvl}.blocks.{blk}.conv1", f"{base}/ConvBlock_{blk}/Conv_0") \
+                    .replace(f"levels.{lvl}.blocks.{blk}.conv2", f"{base}/ConvBlock_{blk}/Conv_1") \
+                    .replace(f"levels.{lvl}.blocks.{blk}.norm1", f"{base}/ConvBlock_{blk}/BatchNorm_0") \
+                    .replace(f"levels.{lvl}.blocks.{blk}.norm2", f"{base}/ConvBlock_{blk}/BatchNorm_1")
             else:
-                blk = parts[3]
-                base = f"MambaVisionLayer_{lvl}"
+                k = k.replace(f"levels.{lvl}.blocks.{blk}.norm1", f"{base}/Block_{blk}/LayerNorm_0") \
+                    .replace(f"levels.{lvl}.blocks.{blk}.norm2", f"{base}/Block_{blk}/LayerNorm_1") \
+                    .replace(f"levels.{lvl}.blocks.{blk}.mlp.fc1", f"{base}/Block_{blk}/Mlp_0/Dense_0") \
+                    .replace(f"levels.{lvl}.blocks.{blk}.mlp.fc2", f"{base}/Block_{blk}/Mlp_0/Dense_1")
 
-                if int(lvl) in [0, 1]:  # 前两个 stage 是纯 ConvBlock
-                    k = k.replace(f"levels.{lvl}.blocks.{blk}.conv1", f"{base}/ConvBlock_{blk}/Conv_0")
-                    k = k.replace(f"levels.{lvl}.blocks.{blk}.conv2", f"{base}/ConvBlock_{blk}/Conv_1")
-                    k = k.replace(f"levels.{lvl}.blocks.{blk}.norm1", f"{base}/ConvBlock_{blk}/BatchNorm_0")
-                    k = k.replace(f"levels.{lvl}.blocks.{blk}.norm2", f"{base}/ConvBlock_{blk}/BatchNorm_1")
-                else:  # 后两个 stage 是 MambaBlock / AttentionBlock
-                    k = k.replace(f"levels.{lvl}.blocks.{blk}.norm1", f"{base}/Block_{blk}/LayerNorm_0")
-                    k = k.replace(f"levels.{lvl}.blocks.{blk}.norm2", f"{base}/Block_{blk}/LayerNorm_1")
-                    k = k.replace(f"levels.{lvl}.blocks.{blk}.mlp.fc1", f"{base}/Block_{blk}/Mlp_0/Dense_0")
-                    k = k.replace(f"levels.{lvl}.blocks.{blk}.mlp.fc2", f"{base}/Block_{blk}/Mlp_0/Dense_1")
+                mixer_prefix = f"levels.{lvl}.blocks.{blk}.mixer"
+                if "qkv" in k or ("proj" in k and not any(x in k for x in ["in_proj", "out_proj", "dt_proj", "x_proj"])):
+                    k = k.replace(f"{mixer_prefix}.qkv", f"{base}/Block_{blk}/Attention_0/Dense_0") \
+                        .replace(f"{mixer_prefix}.proj", f"{base}/Block_{blk}/Attention_0/Dense_1")
+                else:
+                    k = k.replace(f"{mixer_prefix}", f"{base}/Block_{blk}/MambaVisionMixer_0")
 
-                    mixer_prefix = f"levels.{lvl}.blocks.{blk}.mixer"
-                    # 区分 Attention 还是 Mamba
-                    if "qkv" in k or ("proj" in k and not any(x in k for x in ["in_proj", "out_proj", "dt_proj", "x_proj"])):
-                        k = k.replace(f"{mixer_prefix}.qkv", f"{base}/Block_{blk}/Attention_0/Dense_0")
-                        k = k.replace(f"{mixer_prefix}.proj", f"{base}/Block_{blk}/Attention_0/Dense_1")
-                    else:
-                        k = k.replace(f"{mixer_prefix}", f"{base}/Block_{blk}/MambaVisionMixer_0")
+    # 替换参数名并返回分割数组
+    k = k.replace(".", "/").replace("/weight", "/kernel") \
+        .replace("/running_mean", "/mean").replace("/running_var", "/var")
+    if "BatchNorm" in k or "LayerNorm" in k:
+        k = k.replace("/kernel", "/scale")
+    return k.split('/')
 
-        # 关键修复：把所有剩余的 '.' 变成 '/' 以便生成嵌套字典
-        k = k.replace(".", "/")
+def insert_in_dict(target_dict: dict, keys: list[str], value):
+    """辅助函数：根据 keys 列表在字典中创建嵌套路径并赋值"""
+    d = target_dict
+    for k in keys[:-1]:
+        d = d.setdefault(k, {})
+    d[keys[-1]] = value
 
-        # 4. 参数名转换
-        k = k.replace("/weight", "/kernel")
-        k = k.replace("/running_mean", "/mean")
-        k = k.replace("/running_var", "/var")
-        if "BatchNorm" in k or "LayerNorm" in k:
-            k = k.replace("/kernel", "/scale")
+def load_param(param_path: str):
 
-        return k
+    params = {}
+    batch_stats = {}
 
-    def convert_state_dict_pt_to_flax(pt_state_dict):
-        flax_dict = {}
+    with safe_open(param_path, framework="np", device="cpu") as f:
+        for pt_key in f.keys():
+            keys = map_pt_key_to_flax_path(pt_key)
+            if not keys: continue
 
-        for pt_key, pt_tensor in pt_state_dict.items():
-            flax_path = map_pt_key_to_flax_path(pt_key)
-            if flax_path is None:
-                continue
-
-            np_tensor = pt_tensor.numpy() if hasattr(pt_tensor, 'numpy') else pt_tensor
+            np_tensor = f.get_tensor(pt_key)
 
             # 维度转换策略
-            if "conv1d" in flax_path:
-                # 1D卷积: PyTorch (Out, In, L) -> Flax (L, In, Out)
-                flax_tensor = jnp.transpose(np_tensor, (2, 1, 0))
+            if "conv1d" in pt_key:
+                flax_tensor = jnp.transpose(np_tensor, (2, 1, 0)) # 1D Conv
             elif len(np_tensor.shape) == 4:
-                # 2D卷积: PyTorch (Out, In, H, W) -> Flax (H, W, In, Out)
-                flax_tensor = jnp.transpose(np_tensor, (2, 3, 1, 0))
-            elif len(np_tensor.shape) == 2 and "A_log" not in flax_path:
-                # 全连接: PyTorch (Out, In) -> Flax (In, Out)
-                flax_tensor = jnp.transpose(np_tensor, (1, 0))
+                flax_tensor = jnp.transpose(np_tensor, (2, 3, 1, 0)) # 2D Conv
+            elif len(np_tensor.shape) == 2 and "A_log" not in keys[-1]:
+                flax_tensor = jnp.transpose(np_tensor, (1, 0)) # Dense
             else:
-                # Bias/Scale/A_log/D: 保持不变
-                flax_tensor = jnp.array(np_tensor)
+                flax_tensor = jnp.array(np_tensor) # 1D params
 
-            # 构建标准的 Flax 嵌套字典
-            keys = flax_path.split('/')
-            current_dict = flax_dict
-            for k in keys[:-1]:
-                if k not in current_dict:
-                    current_dict[k] = {}
-                current_dict = current_dict[k]
-            current_dict[keys[-1]] = flax_tensor
+            # 动态路由：如果是 mean 或 var 则放入 batch_stats，否则放入 params
+            target_dict = batch_stats if keys[-1] in ['mean', 'var'] else params
+            insert_in_dict(target_dict, keys, flax_tensor)
 
-        return flax_dict
-
-    def load_pretrained_mambavision(param_path):
-        pt_state_dict = {}
-        with safe_open(param_path, framework="np", device="cpu") as f:
-            for k in f.keys():
-                pt_state_dict[k] = f.get_tensor(k)
-
-        print("Converting PyTorch weights to Flax format...")
-        flax_params = convert_state_dict_pt_to_flax(pt_state_dict)
-
-        params_dict = {'params': {}, 'batch_stats': {}}
-
-        def separate_stats(d, target_params, target_stats):
-            for k, v in d.items():
-                if isinstance(v, dict):
-                    if 'mean' in v or 'var' in v:
-                        target_stats[k] = {}
-                        target_params[k] = {}
-                        for sub_k, sub_v in v.items():
-                            if sub_k in ['mean', 'var']:
-                                target_stats[k][sub_k] = sub_v
-                            else:
-                                target_params[k][sub_k] = sub_v
-                    else:
-                        target_params[k] = {}
-                        target_stats[k] = {}
-                        separate_stats(v, target_params[k], target_stats[k])
-                        if not target_stats[k]: del target_stats[k]
-                        if not target_params[k]: del target_params[k]
-                else:
-                    target_params[k] = v
-
-        separate_stats(flax_params, params_dict['params'], params_dict['batch_stats'])
-        return params_dict
-
-    return load_pretrained_mambavision(param_path)
+    return {'params': params, 'batch_stats': batch_stats}
 
 
 def print_dict(d, indent=0):
@@ -262,6 +197,8 @@ if __name__ == "__main__":
     labels = load_label(model_path, key="id2label")
     params = load_param(param_path)
     model = load_model(model_path)
+
+    print_dict(params)
 
     # 预处理图像
     image = Image.open("000000020247.jpg").convert('RGB')
