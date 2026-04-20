@@ -5,7 +5,6 @@ from vision.model import MambaVision
 from PIL import Image
 import json
 
-
 def load_from_hf(model_repo_id: str = "nvidia/MambaVision-T-1K"):
     import os
     os.environ['HF_ENDPOINT'] = "https://hf-mirror.com"
@@ -13,26 +12,19 @@ def load_from_hf(model_repo_id: str = "nvidia/MambaVision-T-1K"):
 
     from huggingface_hub import hf_hub_download
 
-    # 获取 ImageNet 1K 标签 (JSON 格式)
-    label_repo_id = "fxmarty/imagenet-classes"
-    label_filename = "imagenet_classes.json"
-
     # MambaVision-T-1K, MambaVision-T2-1K, MambaVision-S-1K.
-    # model_repo_id = "nvidia/MambaVision-T-1K"
     model_filename = "model.safetensors"
     model_metadata = "config.json"
 
     # 也可以通过snapshot_download下载，但我们的代码用不上pth.tar，浪费空间。
-    label_path = hf_hub_download(label_repo_id, label_filename)
     param_path = hf_hub_download(model_repo_id, model_filename)
     model_path = hf_hub_download(model_repo_id, model_metadata)
 
     # 将输出粘贴到cell中，然后注释上面的代码，后续运行无需网络。
-    print(f'label_path = "{label_path}"')
     print(f'param_path = "{param_path}"')
     print(f'model_path = "{model_path}"')
 
-    return label_path, param_path, model_path
+    return param_path, model_path
 
 
 def load_label(label_path: str, key: str|None = None):
@@ -67,6 +59,8 @@ def load_model(model_path: str):
             num_heads = config.get("num_heads", (2, 4, 8, 16)),
             num_classes = config.get("num_classes", 1000),
             layer_scale = None,
+            mean = jnp.array(config.get("mean", [0.485, 0.456, 0.406])),
+            std = jnp.array(config.get("std", [0.229, 0.224, 0.225])),
         )
 
     return model
@@ -261,24 +255,17 @@ def preprocess_image(
 
 if __name__ == "__main__":
 
-    label_path, param_path, model_path = load_from_hf("nvidia/MambaVision-T-1K")
+    # param_path, model_path = load_from_hf("nvidia/MambaVision-T-1K")
+    param_path = "/root/autodl-shared/hf_cache/hub/models--nvidia--MambaVision-T-1K/snapshots/b1de77e17599566d98efb701c0231b1095dc3a67/model.safetensors"
+    model_path = "/root/autodl-shared/hf_cache/hub/models--nvidia--MambaVision-T-1K/snapshots/b1de77e17599566d98efb701c0231b1095dc3a67/config.json"
 
-    # label_path = "/root/autodl-shared/hf_cache/hub/models--fxmarty--imagenet-classes/snapshots/ffe554acc81a019ae5626e23802a24f5387540cc/imagenet_classes.json"
-    # param_path = "/snapshots/b1de77e17599566d98efb701c0231b1095dc3a67/model.safetensors"
-    # model_path = "/snapshots/b1de77e17599566d98efb701c0231b1095dc3a67/config.json"
-
-    # labels = load_label(model_path, key="id2label")  # 从模型config.json中获取标签
-
-    labels = load_label(label_path)
+    labels = load_label(model_path, key="id2label")
     params = load_param(param_path)
     model = load_model(model_path)
 
     # 预处理图像
-    input_size = (224, 224)
-    mean = jnp.array([0.485, 0.456, 0.406])
-    std = jnp.array([0.229, 0.224, 0.225])
     image = Image.open("000000020247.jpg").convert('RGB')
-    inputs = preprocess_image(image, input_size, mean, std)
+    inputs = preprocess_image(image, (224, 224), model.mean, model.std)
 
     logits = model.apply(params, inputs, train=False)
 

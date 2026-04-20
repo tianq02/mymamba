@@ -293,6 +293,8 @@ class MambaVision(nn.Module):
     num_heads: Sequence[int] = (2, 4, 8, 16)
     num_classes: int = 1000
     layer_scale: Optional[float] = None
+    mean: jax.Array = jnp.array([0.485, 0.456, 0.406])
+    std: jax.Array = jnp.array([0.229, 0.224, 0.225])
 
     @nn.compact
     def __call__(self, x, train: bool = False):
