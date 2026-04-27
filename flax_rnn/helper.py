@@ -88,12 +88,12 @@ def load_flax_mamba(base_path: str):
 
 
 # 基线，只测时间
-def sampler_baseline(logits, key=None):
+def sampler_baseline(logits, key=0):
     return [0]
 
 
 # 贪心采样
-def sampler_greedy(logits, key=None):
+def sampler_greedy(logits, key=0):
     return jnp.argmax(logits, axis=-1)
 
 
@@ -166,6 +166,17 @@ def generate(model, params, input_ids, n_tokens_to_gen: int = 50, sampler=sample
 
     return generated
 
+def generate_static(model, params, input_ids, n_tokens_to_gen: int = 50, sampler=sampler_greedy, seed: int = 0):
+    next_token_logits, states = prefill(model, params, input_ids)
+    generated = jnp.zeros((input_ids.shape[0], n_tokens_to_gen), dtype=input_ids.dtype)
+
+    for i in range(n_tokens_to_gen):
+        next_id = sampler(logits=next_token_logits)
+        generated = generated.at[:, i].set(next_id)
+        next_token_logits, states = step_fn(model, params, next_id, states)
+
+    return generated
+
 
 def generate_demo(model, params, tokenizer, prompt: str, n_tokens_to_gen: int = 50, sampler=sampler_min_p, seed=42):
     print(prompt, end="")
@@ -181,16 +192,15 @@ def generate_demo(model, params, tokenizer, prompt: str, n_tokens_to_gen: int = 
 
     return None
 
+# 贪心搜索，理论最快，但效果最差
+def generate_greedy(model, params, input_ids, n_tokens_to_gen: int = 50, seed: int = 0):
+    return generate_static(model, params, input_ids, n_tokens_to_gen, sampler_greedy)
+
 
 # 优化掉第一个softmax的版本
 def generate_topk(model, params, input_ids, n_tokens_to_gen: int = 50, top_k: int = 40, seed: int = 42):
     sampler = lambda logits, key: sampler_top_k(logits, key, top_k)
     return generate(model, params, input_ids, n_tokens_to_gen, sampler, seed)
-
-
-# 贪心搜索，理论最快，但效果最差
-def generate_greedy(model, params, input_ids, n_tokens_to_gen: int = 50, seed=None):
-    return generate(model, params, input_ids, n_tokens_to_gen, sampler_greedy, seed)
 
 
 # min p 采样，理论上计算开销更低
