@@ -8,7 +8,8 @@ import json
 def load_from_hf(model_repo_id: str = "nvidia/MambaVision-T-1K"):
     import os
     os.environ['HF_ENDPOINT'] = "https://hf-mirror.com"
-    os.environ['HF_HOME'] = "/root/autodl-shared/hf_cache"
+    # os.environ['HF_HOME'] = "/root/autodl-shared/hf_cache"  # autodl
+    os.environ['HF_HOME'] = "/root/shared-nvme/hf_cache"  # paratera
 
     from huggingface_hub import hf_hub_download
 
