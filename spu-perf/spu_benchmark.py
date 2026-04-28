@@ -11,6 +11,9 @@ import spu.libspu as libspu
 from flax_rnn.helper import setup_hf_cache, load_from_cache, prefill, sampler_min_p
 from flax_rnn.model import ResidualBlock, RMSNorm, ModelArgs
 
+import logging
+logging.disable()
+
 # ==========================================
 # 1. 定义密态调度器 (无自动解密)
 # ==========================================
@@ -119,13 +122,13 @@ if __name__ == '__main__':
     # === 1. SPU 集群初始化 ===
     print("Starting SPU Emulator cluster...")
     # 启动本地多进程模拟集群 (会自动拉起后台进程并调用 ppd.init)
-    emulator = emulation.Emulator("3pc.json", emulation.Mode.MULTIPROCESS)
+    emulator = emulation.Emulator("3pc_no_profile.json", emulation.Mode.MULTIPROCESS)
     emulator.up()
 
     try:
         # === 2. 模型加载 ===
         # 替换为您环境的实际缓存路径
-        base_path = "/root/shared-nvme/hf_cache/hub/models--state-spaces--mamba-130m-hf/snapshots/1e76775f628fbf1350fbe4dbb3d971ba64af25a1"
+        base_path = "/root/autodl-shared/hf_cache/hub/models--state-spaces--mamba-130m-hf/snapshots/1e76775f628fbf1350fbe4dbb3d971ba64af25a1"
         model, params, tokenizer = load_from_cache(base_path)
 
         print('\n------\nRun on SPU (Layer-by-Layer Profiling)')
