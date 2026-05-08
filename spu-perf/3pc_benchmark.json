@@ -27,8 +27,9 @@
                     "fxpFractionBits": 36,
                     "enable_pphlo_profile": false,
                     "enable_hal_profile": false,
-                    "fxpDivGoldschmidtIters": 3,
-                    "fxpExpMode": 1
+                    "fxp_exp_mode": 2,
+                    "fxp_exp_iters": 3,
+                    "fxp_log_mode": 3
                 }
             }
         },
