@@ -38,7 +38,7 @@ for t in range(1,epoch+1):
       bar.set_postfix(loss="current loss here")
 ```
 
-见[bar](./bar.ipynb)
+见[bar](bar.ipynb)
 
 ## 示例程序们：
 
@@ -46,7 +46,7 @@ for t in range(1,epoch+1):
 
 在torch之前，直接使用numpy搓机器学习是怎么样的？
 
-[code](./1.py)
+[code](1.py)
 
 ```python
 # -*- coding: utf-8 -*-
@@ -119,7 +119,7 @@ TLDR：张量就是多维数组，类似numpy的ndarray，但可以用GPU加速�
 
 > 注意一定要**明确指定**计算设备device，是CPU还是GPU，默认是CPU
 
-[code](./2.py)
+[code](2.py)
 
 ```python
 # -*- coding: utf-8 -*-
@@ -201,7 +201,7 @@ TLDR:
 这真的太爽了，试想下，训练一个新模型，只要换下y_pred的定义就行了，根本不用管梯度怎么算。甚至说不定连loss都不用管，直接用pytorch内置的loss函数就行了
 
 
-[code](./3.py)
+[code](3.py)
 
 ```python
 import torch
@@ -291,9 +291,9 @@ nn包定义了一组模块（Module），大致相当于神经网络层。模块
 
 TLDR：现在我们连模型也不自己定义了，而是搭积木一样
 
-[code](./4.py)
+[code](4.py)
 
-[notebook](./4x.ipynb) 还有神秘自动次数功能
+[notebook](4x.ipynb) 还有神秘自动次数功能
 
 ```python
 # -*- coding: utf-8 -*-
@@ -396,7 +396,7 @@ print(f'Result: y = {linear_layer.bias.item()} + {linear_layer.weight[:, 0].item
 
 - 将优化过程包装成 optim 下面的模块，每次不再需要写三行，只要一句`optimizer.step()`就可以了
 
-[code](./5x.ipynb) 还有船新误差绘图展示
+[code](5x.ipynb) 还有船新误差绘图展示
 
 注：这里的代码是我自己乱写的，可能有问题
 

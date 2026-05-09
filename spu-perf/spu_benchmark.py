@@ -3,8 +3,8 @@ import jax.numpy as jnp
 from time import time
 import spu.utils.distributed as ppd
 import spu.libspu as libspu
-from flax_rnn.model import ResidualBlock, RMSNorm, ModelArgs
-from flax_rnn.helper import sampler_min_p, sampler_greedy, load_from_cache
+from mamba_rnn.model import ResidualBlock, RMSNorm, ModelArgs
+from mamba_rnn.helper import sampler_min_p, sampler_greedy, load_from_cache
 import gc
 
 import logging
