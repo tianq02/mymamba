@@ -1,18 +1,18 @@
-# 下载完模型可以注释掉
-import os
-
-os.environ['HF_ENDPOINT'] = "https://hf-mirror.com"
+# # 下载完模型可以注释掉，别忘了demo_ex顶上也要
+# import os
+#
+# os.environ['HF_ENDPOINT'] = "https://hf-mirror.com"
 # os.environ['HF_HOME'] = "/root/autodl-shared/hf_cache"  # autodl
-os.environ['HF_HOME'] = "/root/shared-nvme/hf_cache"  # paratera
-
-from huggingface_hub import snapshot_download
-
-
-def setup_hf_cache(model_name: str):
-    # usage: base_path = setup_hf_cache("state-spaces/mamba-130m-hf")
-    base_path = snapshot_download(repo_id=model_name, cache_dir=None)
-    print(f"download done, {model_name}:\t{base_path}")
-    return base_path
+# # os.environ['HF_HOME'] = "/root/shared-nvme/hf_cache"  # paratera
+#
+# from huggingface_hub import snapshot_download
+#
+#
+# def setup_hf_cache(model_name: str):
+#     # usage: base_path = setup_hf_cache("state-spaces/mamba-130m-hf")
+#     base_path = snapshot_download(repo_id=model_name, cache_dir=None)
+#     print(f'base_path = "{base_path}"')
+#     return base_path
 
 
 import json
@@ -20,7 +20,7 @@ import jax
 import jax.numpy as jnp
 from transformers import AutoTokenizer
 from safetensors import safe_open
-from .model import Mamba, ModelArgs
+from .model import Mamba, ModelArgs  # 删掉.来运行demo
 
 from functools import partial
 
@@ -192,6 +192,23 @@ def generate_demo(model, params, tokenizer, prompt: str, n_tokens_to_gen: int = 
 
     return None
 
+
+# 仅用于检查模型rnn部分(step)部分正确性，慢到爆炸
+def generate_demo_no_rnn(model, params, tokenizer, prompt: str, n_tokens_to_gen: int = 50, sampler=sampler_min_p, seed=42):
+    print(prompt, end="")
+    key = jax.random.PRNGKey(seed)
+    input_ids = tokenizer.encode(prompt, return_tensors='jax')
+
+    for i in range(n_tokens_to_gen):
+        next_token_logits, _ = prefill(model, params, input_ids)
+        key, subkey = jax.random.split(key)
+        next_id = sampler(logits=next_token_logits, key=subkey)
+        input_ids = jnp.concatenate([input_ids, next_id[None,:]], axis=1)
+        print(tokenizer.decode([next_id.item()]), end="")
+        # print(tokenizer.decode(input_ids[0].tolist()))
+
+    return None
+
 # 贪心搜索，理论最快，但效果最差
 def generate_greedy(model, params, input_ids, n_tokens_to_gen: int = 50, seed: int = 0):
     return generate_static(model, params, input_ids, n_tokens_to_gen, sampler_greedy)
@@ -234,13 +251,21 @@ def generate_minp_s(model, params, input_ids, n_tokens_to_gen: int = 50, min_p: 
 
 if __name__ == '__main__':
     # base_path = setup_hf_cache("state-spaces/mamba-130m-hf")
-    # base_path="/root/autodl-shared/hf_cache/hub/models--state-spaces--mamba-130m-hf/snapshots/1e76775f628fbf1350fbe4dbb3d971ba64af25a1"  # autodl
-    base_path = "/root/shared-nvme/hf_cache/hub/models--state-spaces--mamba-130m-hf/snapshots/1e76775f628fbf1350fbe4dbb3d971ba64af25a1"  # paratera
+    base_path="/root/autodl-shared/hf_cache/hub/models--state-spaces--mamba-130m-hf/snapshots/1e76775f628fbf1350fbe4dbb3d971ba64af25a1"  # autodl
+    # base_path = "/root/shared-nvme/hf_cache/hub/models--state-spaces--mamba-130m-hf/snapshots/1e76775f628fbf1350fbe4dbb3d971ba64af25a1"  # paratera
     model, params, tokenizer = load_from_cache(base_path)
+
+    model.args.use_zoh=False
+
+    sampler = lambda logits,key: sampler_min_p(logits,key,min_p=0.05)
+    def generate_demo_ex(prompt: str, n_tokens_to_gen: int = 50, seed: int = 42):
+        generate_demo(model, params, tokenizer, prompt, n_tokens_to_gen, sampler=sampler, seed=seed)
+        # generate_demo_no_rnn(model, params, tokenizer, prompt, n_tokens_to_gen, sampler=sampler, seed=seed)
 
     # interactive demo
     prompt = input("prompt: ")
-    generate_demo(model, params, tokenizer, prompt, 10, sampler_min_p, 42)
+    generate_demo_ex(prompt)
+
 
     # from time import time
     #

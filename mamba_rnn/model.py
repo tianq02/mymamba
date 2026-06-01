@@ -20,6 +20,8 @@ class ModelArgs:
     conv_bias: bool = True
     bias: bool = False
     use_zoh: bool = False
+    # 注意：离散化模式取决于模型，而官方模型的训练时用的是欧拉离散化
+    # use_zoh应当永远设为False
 
     def __post_init__(self):
         self.d_inner = int(self.expand * self.d_model)
@@ -90,23 +92,17 @@ class MambaBlock(nn.Module):
         res_act = nn.silu(res)
 
         # 2. SSM 状态更新
-        n_vals = jnp.arange(1, args.d_state + 1, dtype=jnp.float32)
-        A_init = jnp.broadcast_to(n_vals, (args.d_inner, args.d_state))
-        A_log = self.param('A_log', lambda rng: jnp.log(A_init))
-        D = self.param('D', ones, (args.d_inner,))
-        A = -jnp.exp(A_log)
+        # generate_params 内部的 nn.Dense 默认作用于最后一个维度，完美支持 (b, d_inner)
+        delta, A, B, C, D = self.generate_params(x_act)
 
-        dbc = nn.Dense(args.dt_rank + args.d_state * 2, use_bias=False, name='x_proj')(x_act)
-        delta, B, C = jnp.split(dbc, [args.dt_rank, args.dt_rank + args.d_state], axis=-1)
-        delta = nn.softplus(nn.Dense(args.d_inner, use_bias=True, name='dt_proj')(delta))
+        # discretize_params 经过广播逻辑改造后，同样兼容 2D 输入
+        DA, DB = self.discretize_params(delta, A, B, use_zoh=self.args.use_zoh)
 
-        # 修复：离散化与状态转移 (改回 Euler 离散化)
-        delta_A = jnp.exp(delta[:, :, None] * A[None, :, :]) # (b, d_inner, d_state)
-        # 简单的 Euler 离散化公式：delta * B
-        delta_B = delta[:, :, None] * B[:, None, :]          # (b, d_inner, d_state)
+        # 状态转移: new_ssm = DA * ssm + DB * x
+        # 此时 DA 和 DB 的 shape 为 (b, d_inner, d_state)，x_act 需要在最后加一个维度对齐
+        new_ssm_state = DA * ssm_state + DB * x_act[:, :, None]
 
-        new_ssm_state = delta_A * ssm_state + delta_B * x_act[:, :, None]
-
+        # 计算输出
         y = jnp.sum(new_ssm_state * C[:, None, :], axis=-1)
         y = y + x_act * D
         y = y * res_act
@@ -134,18 +130,25 @@ class MambaBlock(nn.Module):
         return delta, A, B, C, D
 
     def discretize_params(self, delta, A, B, eps=1e-7, use_zoh=False):
-        # \overline{A} = \exp(\Delta A)  % ZOH
-        delta_A = jnp.einsum('bld,dn->bldn', delta, A)  # (b, l, d_inner, d_state)
+        # 1. 计算 \overline{A} = \exp(\Delta A)  % ZOH
+        delta_A = delta[..., None] * A  # (b, l, d, n) 或 (b, d, n)
         DA = jnp.exp(delta_A)
+
+        # 2. 对齐 B 的维度
+        # Prefill 阶段 (b, l, d) -> (b, l, 1, n)
+        # Decoding 阶段 (b, d) -> (b, 1, n)
+        B_expanded = jnp.expand_dims(B, axis=-2)
+
+        # 3. 计算 \overline{B}
         if use_zoh:
-            # \overline{B} = (\Delta A)^{-1}(\exp(\Delta A) - I) \cdot \Delta B  % ZOH
-            #              = (DA - I) / (delta_A) \cdot \Delta B
-            zoh_factor = (DA - 1.0) / (delta_A + eps)
-            DB = jnp.einsum('bldn,bld,bln->bldn', zoh_factor, delta, B)
+            # \overline{B} = (\Delta A)^{-1}(\exp(\Delta A) - I) \cdot \Delta B
+            #              = (DA - I) / A \cdot B
+            DB = (DA - 1.0) / A * B_expanded
         else:
             # \overline{B} = \Delta B  % Euler
-            DB = jnp.einsum('bld,bln->bldn', delta, B)
-        return DA, DB  # discrete_A, discrete_B
+            DB = delta[..., None] * B_expanded
+
+        return DA, DB
 
     def selective_scan(self, u, DA, DB, C, D):
         b, l, d_in, n = DA.shape
