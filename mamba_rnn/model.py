@@ -19,6 +19,7 @@ class ModelArgs:
     pad_vocab_size_multiple: int = 8
     conv_bias: bool = True
     bias: bool = False
+    use_zoh: bool = False
 
     def __post_init__(self):
         self.d_inner = int(self.expand * self.d_model)
@@ -116,8 +117,8 @@ class MambaBlock(nn.Module):
     def s6(self, x):
         delta, A, B, C, D = self.generate_params(x)
         # 修复：必须使用 use_zoh=False，和原版 PyTorch 保持一致
-        delta_A, delta_B = self.discretize_params(delta, A, B, use_zoh=False)
-        return self.selective_scan(x, delta_A, delta_B, C, D)
+        DA, DB = self.discretize_params(delta, A, B, use_zoh=self.args.use_zoh)
+        return self.selective_scan(x, DA, DB, C, D)
 
     def generate_params(self, x):
         args = self.args
@@ -132,20 +133,23 @@ class MambaBlock(nn.Module):
         delta = nn.softplus(nn.Dense(args.d_inner, use_bias=True, name='dt_proj')(delta))
         return delta, A, B, C, D
 
-    def discretize_params(self, delta, A, B, eps=1e-7, use_zoh=True):
-        A_exp = jnp.einsum('bld,dn->bldn', delta, A)
-        delta_A = jnp.exp(A_exp)
+    def discretize_params(self, delta, A, B, eps=1e-7, use_zoh=False):
+        # \overline{A} = \exp(\Delta A)  % ZOH
+        delta_A = jnp.einsum('bld,dn->bldn', delta, A)  # (b, l, d_inner, d_state)
+        DA = jnp.exp(delta_A)
         if use_zoh:
-            A_b = jnp.expand_dims(A, axis=(0, 1))
-            zoh_factor = (delta_A - 1.0) / (A_b + eps)
-            delta_B = jnp.einsum('bldn,bln->bldn', zoh_factor, B)
+            # \overline{B} = (\Delta A)^{-1}(\exp(\Delta A) - I) \cdot \Delta B  % ZOH
+            #              = (DA - I) / (delta_A) \cdot \Delta B
+            zoh_factor = (DA - 1.0) / (delta_A + eps)
+            DB = jnp.einsum('bldn,bld,bln->bldn', zoh_factor, delta, B)
         else:
-            delta_B = jnp.einsum('bld,bln->bldn', delta, B)
-        return delta_A, delta_B
+            # \overline{B} = \Delta B  % Euler
+            DB = jnp.einsum('bld,bln->bldn', delta, B)
+        return DA, DB  # discrete_A, discrete_B
 
-    def selective_scan(self, u, delta_A, delta_B, C, D):
-        b, l, d_in, n = delta_A.shape
-        delta_B_u = delta_B * jnp.expand_dims(u, -1)
+    def selective_scan(self, u, DA, DB, C, D):
+        b, l, d_in, n = DA.shape
+        DB_u = DB * jnp.expand_dims(u, -1)
 
         def scan_fn(carry, inputs):
             dA, dBu, C_i = inputs
@@ -154,9 +158,9 @@ class MambaBlock(nn.Module):
             return carry, y_i
 
         scan_inputs = (
-            jnp.swapaxes(delta_A, 0, 1), jnp.swapaxes(delta_B_u, 0, 1), jnp.swapaxes(C, 0, 1)
+            jnp.swapaxes(DA, 0, 1), jnp.swapaxes(DB_u, 0, 1), jnp.swapaxes(C, 0, 1)
         )
-        init_carry = jnp.zeros((b, d_in, n), dtype=delta_A.dtype)
+        init_carry = jnp.zeros((b, d_in, n), dtype=DA.dtype)
 
         # carry 就是跑完序列后最终的 ssm_state
         carry, ys = jax.lax.scan(scan_fn, init_carry, scan_inputs)
