@@ -158,7 +158,8 @@ if __name__ == '__main__':
     try:
         # === 2. 模型加载 ===
         # 替换为您环境的实际缓存路径
-        base_path = "/root/autodl-shared/hf_cache/hub/models--state-spaces--mamba-130m-hf/snapshots/1e76775f628fbf1350fbe4dbb3d971ba64af25a1"
+        # base_path = "/root/autodl-shared/hf_cache/hub/models--state-spaces--mamba-130m-hf/snapshots/1e76775f628fbf1350fbe4dbb3d971ba64af25a1"
+        base_path = "/root/shared-nvme/hf_cache/hub/models--state-spaces--mamba-130m-hf/snapshots/1e76775f628fbf1350fbe4dbb3d971ba64af25a1"
         model, params, tokenizer = load_from_cache(base_path)
 
         print('\n------\nRun on SPU (Layer-by-Layer Profiling)')
@@ -172,7 +173,7 @@ if __name__ == '__main__':
         print(prompt, tokenizer.decode(output_ids), sep='')
         print(f"Warmup elapsed: {time()-time0:.2f}s\n")
 
-        # 原因未知，但分两段跑总会爆内存
+        # 原因未知，但分两段跑总会爆内存，在spu_head_step要30g
         # === 4. 实际 Benchmark ===
         print("SPU run!")
         time0 = time()

@@ -255,16 +255,64 @@ if __name__ == '__main__':
     # base_path = "/root/shared-nvme/hf_cache/hub/models--state-spaces--mamba-130m-hf/snapshots/1e76775f628fbf1350fbe4dbb3d971ba64af25a1"  # paratera
     model, params, tokenizer = load_from_cache(base_path)
 
-    model.args.use_zoh=False
+    # model.args.use_zoh=True # defaults False
+    #
+    # sampler = lambda logits,key: sampler_min_p(logits,key,min_p=0.05)
+    # def generate_demo_ex(prompt: str, n_tokens_to_gen: int = 50, seed: int = 42):
+    #     generate_demo(model, params, tokenizer, prompt, n_tokens_to_gen, sampler=sampler, seed=seed)
+    #     # generate_demo_no_rnn(model, params, tokenizer, prompt, n_tokens_to_gen, sampler=sampler, seed=seed)
+    #
+    # prompt = input("prompt: ")
+    # generate_demo_ex(prompt)
 
-    sampler = lambda logits,key: sampler_min_p(logits,key,min_p=0.05)
-    def generate_demo_ex(prompt: str, n_tokens_to_gen: int = 50, seed: int = 42):
-        generate_demo(model, params, tokenizer, prompt, n_tokens_to_gen, sampler=sampler, seed=seed)
-        # generate_demo_no_rnn(model, params, tokenizer, prompt, n_tokens_to_gen, sampler=sampler, seed=seed)
 
-    # interactive demo
-    prompt = input("prompt: ")
-    generate_demo_ex(prompt)
+    # prefill benchmark
+    import time
+
+    input_len = 4000
+    input_file = "../LICENSE" # AGPL3, 6937 tokens
+    laps = 10
+
+    with open(input_file, 'r') as file:
+        file_content = file.read()
+
+    licence_ids = tokenizer.encode(file_content, return_tensors='jax')
+    licence_len = len(licence_ids[0])
+    warmup_ids = licence_ids[:,:input_len]
+
+    print(f"Prefill {input_len} tokens")
+
+    print("="*20 + "Serial" + "="*20)
+    model.args.use_parallel_scan=False
+    time0 = time.time()
+    _ = prefill(model, params, warmup_ids)
+    print(f"warmup: {time.time()-time0}s")
+    time_sum = .0
+    for i in range(laps):
+        benchmark_start = hash(time.time_ns() + i) % (licence_len-input_len) # 超简易随机数生成
+        benchmark_ids = licence_ids[:,benchmark_start:benchmark_start+input_len]
+        time0 = time.time()
+        _ = prefill(model, params, benchmark_ids)
+        time1 = time.time() - time0
+        print(f"scan {i:2d}:{time1}s")
+        time_sum += time1
+    print(f"average: {time_sum/laps}s")
+
+    # parallel scan takes more time to compile, but it can be more performant later
+    print("="*20 + "Parallel" + "="*20)
+    model.args.use_parallel_scan=True
+    _ = prefill(model, params, warmup_ids)
+    print(f"warmup: {time.time()-time0}s")
+    time_sum = .0
+    for i in range(laps):
+        benchmark_start = hash(time.time_ns() + i) % (licence_len-input_len) # 超简易随机数生成
+        benchmark_ids = licence_ids[:,benchmark_start:benchmark_start+input_len]
+        time0 = time.time()
+        _ = prefill(model, params, benchmark_ids)
+        time1 = time.time() - time0
+        print(f"scan {i:2d}:{time1}s")
+        time_sum += time1
+    print(f"average: {time_sum/laps}s")
 
 
     # from time import time

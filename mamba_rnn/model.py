@@ -20,8 +20,7 @@ class ModelArgs:
     conv_bias: bool = True
     bias: bool = False
     use_zoh: bool = False
-    # 注意：离散化模式取决于模型，而官方模型的训练时用的是欧拉离散化
-    # use_zoh应当永远设为False
+    use_parallel_scan: bool = False
 
     def __post_init__(self):
         self.d_inner = int(self.expand * self.d_model)
@@ -112,7 +111,6 @@ class MambaBlock(nn.Module):
 
     def s6(self, x):
         delta, A, B, C, D = self.generate_params(x)
-        # 修复：必须使用 use_zoh=False，和原版 PyTorch 保持一致
         DA, DB = self.discretize_params(delta, A, B, use_zoh=self.args.use_zoh)
         return self.selective_scan(x, DA, DB, C, D)
 
@@ -151,6 +149,10 @@ class MambaBlock(nn.Module):
         return DA, DB
 
     def selective_scan(self, u, DA, DB, C, D):
+        # 调试选项：使用并行扫描，jit会慢得多，理论上在GPU环境下能有一点点加速
+        if self.args.use_parallel_scan:
+            return self.selective_scan_parallel(u, DA, DB, C, D)
+
         b, l, d_in, n = DA.shape
         DB_u = DB * jnp.expand_dims(u, -1)
 
@@ -169,6 +171,42 @@ class MambaBlock(nn.Module):
         carry, ys = jax.lax.scan(scan_fn, init_carry, scan_inputs)
 
         y = jnp.swapaxes(ys, 0, 1)
+        y = y + u * D
+        return y, carry
+
+    def selective_scan_parallel(self, u, DA, DB, C, D):
+        """
+        使用 jax.lax.associative_scan 实现的高效并行扫描
+        associative_scan的实现用了Blelloch1990算法，和Mamba论文中一致
+        """
+
+        # DA shape: (b, l, d_in, n)
+        # DB shape: (b, l, d_in, n)
+        # u shape:  (b, l, d_in)
+        b, l, d_in, n = DA.shape
+
+        # 计算 B * u 并对齐到 SSM 维度： shape 为 (b, l, d_in, n)
+        DB_u = DB * jnp.expand_dims(u, -1)
+
+        # 定义符合结合律的并行合并操作
+        # a 代表前驱节点 (prev)，b 代表当前节点 (curr)
+        def binary_op(a, b):
+            A_prev, X_prev = a
+            A_curr, X_curr = b
+            return A_curr * A_prev, A_curr * X_prev + X_curr
+
+        # 在序列时间步维度 (axis=1) 执行并行关联扫描
+        # 返回的 hs 代表每一个时间步计算出的隐状态特征矩阵： shape (b, l, d_in, n)
+        _, hs = jax.lax.associative_scan(binary_op, (DA, DB_u), axis=1)
+
+        # 最终的 carry 状态即为序列最后一项的隐状态
+        carry = hs[:, -1, :, :]
+
+        # 计算并行输出项 y = C @ hs
+        # hs: (b, l, d_in, n), C: (b, l, n) -> 结果 y: (b, l, d_in)
+        y = jnp.einsum('bldn,bln->bld', hs, C)
+
+        # 加上输入与 D 的直接映射
         y = y + u * D
         return y, carry
 
